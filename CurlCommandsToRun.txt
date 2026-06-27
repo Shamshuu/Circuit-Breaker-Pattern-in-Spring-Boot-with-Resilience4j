@@ -1,0 +1,94 @@
+1. Start the Application
+
+In your first Git Bash terminal, start the Spring Boot application:
+
+
+mvn spring-boot:run
+
+2. Run Step-by-Step Tests
+Open a second Git Bash terminal and run these commands sequentially to test each state transition:
+
+Step 1: Check Initial State & Metrics
+Verify the circuit breaker starts in the CLOSED state with empty metrics:
+
+
+# Check the State (Expect: CLOSED)
+
+curl -s http://localhost:8080/api/circuit-breaker/state
+
+# Check the Metrics (Expect: state=CLOSED, failureRate=-1.0, calls=0)
+
+curl -s http://localhost:8080/api/circuit-breaker/metrics
+
+Step 2: Test Successful Call
+Make a call to the user endpoint while the mock external service is in its default healthy state:
+
+
+# Get User 1 (Expect: HTTP 200 with User 1 data)
+
+curl -i http://localhost:8080/api/users/1
+
+Step 3: Simulate External Failures & Trip Breaker
+Toggle the mock service to fail and send 5 requests to trip the circuit (matching the configured minimum-number-of-calls of 5):
+
+
+# Toggle mock external service to FAIL
+
+curl -s "http://localhost:8080/api/external/toggle?fail=true"
+
+# Call the user endpoint 5 times (Expect: HTTP 200 with fallback "Default User" object each time)
+
+for i in {1..5}; do curl -s http://localhost:8080/api/users/1; echo ""; done
+
+Step 4: Verify the Circuit is OPEN
+Check the state, metrics, and actuator endpoint to verify the breaker has tripped:
+
+
+# Check the State (Expect: OPEN)
+
+curl -s http://localhost:8080/api/circuit-breaker/state
+
+# Check the Metrics (Expect: state=OPEN, numberOfFailedCalls=5)
+
+curl -s http://localhost:8080/api/circuit-breaker/metrics
+
+# Check Actuator Endpoint (Expect: JSON object containing 'userService' state)
+
+curl -s http://localhost:8080/actuator/circuitbreakers
+
+Step 5: Test Fallback Fast-Failure
+While OPEN, the circuit breaker immediately routes requests to the fallback method without invoking the mock API:
+
+
+# Call User 1 (Expect: Fallback response returned instantly)
+
+curl -i http://localhost:8080/api/users/1
+
+Step 6: Wait & Transition to HALF_OPEN
+Wait for the configured open duration (wait-duration-in-open-state: 10s) to elapse, toggle the mock service back to healthy, and send a request:
+
+
+# Wait for the open state timer to expire
+sleep 11
+# Toggle mock external service back to SUCCESS
+
+curl -s "http://localhost:8080/api/external/toggle?fail=false"
+
+# Make first request (Expect: Successful "External User 1" response)
+
+curl -s http://localhost:8080/api/users/1
+
+# Check State (Expect: HALF_OPEN)
+
+curl -s http://localhost:8080/api/circuit-breaker/state
+
+Step 7: Close the Circuit
+Make the second request to fulfill the permitted limit (permitted-number-of-calls-in-half-open-state: 2) and close the circuit:
+
+# Make second request (Expect: Successful "External User 1" response)
+
+curl -s http://localhost:8080/api/users/1
+
+# Check State (Expect: CLOSED)
+
+curl -s http://localhost:8080/api/circuit-breaker/state
