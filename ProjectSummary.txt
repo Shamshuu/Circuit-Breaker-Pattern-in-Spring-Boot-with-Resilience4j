@@ -1,0 +1,81 @@
+1. Project Purpose & Overview
+
+In a distributed microservice architecture, services communicate over the network. If a downstream service (like a user database or external API) becomes slow or goes down, requests will pile up, consuming system resources (threads, memory) and eventually causing the upstream services to crash. This is known as a cascading failure.
+
+The purpose of this project is to implement the Circuit Breaker Pattern using Resilience4j. It prevents our microservice from continually hitting a failing downstream system. Instead, when failures cross a threshold:
+
+1.The circuit opens (trips).
+2. Subsequent calls fail fast immediately, avoiding network overhead.
+3.The system executes a fallback response (returning a default, safe object) to keep the app operational.
+4. After a cooling period, the circuit enters half-open state to test if the dependency has recovered, and closes if healthy.
+
+2. How the Technologies Help
+
+Spring Boot (Web Starter): 
+Provides the core web server (Tomcat), manages dependency injection, and makes it simple to expose REST endpoints (/api/users/{id}, etc.) via RestControllers.
+
+Resilience4j (Spring Boot Starter): 
+The core library providing the fault-tolerance pattern implementations. It maintains the state machine (CLOSED, OPEN, HALF_OPEN) and keeps track of requests within a sliding window.
+
+Spring AOP (Aspect-Oriented Programming): 
+Intercepts execution of methods marked with @CircuitBreaker. Instead of writing boilerplate code to wrap every call in try-catch-states, AOP uses dynamic proxies to check the circuit state and execute the fallback method automatically if the circuit is open or throws an error.
+
+Spring Boot Actuator: 
+Gathers and exposes application health and operational statistics. It integrates with Resilience4j to display circuit breaker statuses at the standard /actuator/circuitbreakers path.
+
+
+3. Implementation of Each Functionality
+
+A. Protected API Call & Fallback Logic
+
+Implementation: 
+In UserDataService.java, the fetchUser method uses Spring's RestTemplate to make an HTTP request to the external dependency.
+
+AOP Binding: 
+The method is annotated with @CircuitBreaker(name = "userService", fallbackMethod = "getFallbackUserData").
+
+Fallback: 
+If the API call fails or the circuit is OPEN, Spring redirects the call to getFallbackUserData. This method captures the exception (Throwable) for logging and returns a default static user (default-id, Default User, default@example.com) with a 200 OK status.
+
+B. Mock External Service (Deterministic Failures)
+
+Implementation: 
+Rather than relying on flaky public APIs, we created MockExternalUserController.java within the application.
+
+State Control: 
+It contains an AtomicBoolean flag (failRequests) and exposes a /api/external/toggle?fail=true|false endpoint.
+
+When fail=true: 
+The mock service returns a 500 Internal Server Error, simulating downstream server failure.
+
+When fail=false: 
+It returns normal mock user data.
+
+C. Programmatic State & Custom Metrics
+Implementation: 
+In CircuitBreakerController.java, we inject the CircuitBreakerRegistry bean.
+
+State Endpoint: 
+The /api/circuit-breaker/state endpoint calls registry.circuitBreaker("userService").getState() to return the literal state string (e.g. CLOSED).
+
+Metrics Endpoint: 
+The /api/circuit-breaker/metrics endpoint calls getMetrics() on the circuit breaker to fetch and return a simplified JSON payload containing key stats (success counts, failure rates, slow call counts, etc.).
+
+D. State Transition Logging
+
+Implementation: 
+In CircuitBreakerLogListener.java, we configure a listener class.
+
+Event Handling: 
+At startup, it binds a listener to the userService circuit breaker using the Resilience4j Event Publisher:
+
+circuitBreaker.getEventPublisher().onStateTransition(event -> {
+    logger.info("CircuitBreaker '{}' changed state from {} to {}", ...);
+});
+
+This prints structured console messages exactly when states transition (e.g., CLOSED -> OPEN), fulfilling audit requirements.
+
+E. Lifecycle Test Script
+
+Implementation: 
+test-circuit-breaker.sh runs curl commands in a sequence. It toggles the mock service to fail, triggers 5 failures to trip the circuit, shows the fallback returned directly, waits 11 seconds for the open-state timeout to elapse, makes test calls to transition state to HALF_OPEN, and recovers back to CLOSED.
